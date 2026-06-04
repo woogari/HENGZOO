@@ -88,6 +88,26 @@ export type SSEEvent =
           data: { batch: number; error: string; generatedSoFar: number };
       };
 
+// ── Math PDF wizard (Gemini /api/math/extract · /api/math/variations) ──
+
+export type VariationType = "auto" | "situation" | "number" | "logic";
+
+export interface ExtractedProblem {
+    id: string;
+    questionNumber: number;
+    questionText: string;
+    variationType: VariationType;
+}
+
+export interface MathVariation {
+    originalQuestion: string;
+    variationQuestion: string;
+    variationAnswer: string;
+    explanation: string;
+    difficulty: "easy" | "medium" | "hard";
+    changedElement?: string;
+}
+
 // ── Session payloads (sessionStorage) ───────────────────────
 
 export interface MathSessionPayload {

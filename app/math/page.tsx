@@ -2,20 +2,16 @@
 
 import { useRef, useState } from "react";
 import { PageHeader } from "@/components/design-system";
-import {
-    MOCK_EXTRACTED,
-    MOCK_TOTAL_PAGES,
-    generateMockVariations,
-    type ExtractedProblem,
-    type MathVariation,
-    type VariationType,
-} from "@/mocks/math-wizard";
+import type {
+    ExtractedProblem,
+    MathVariation,
+    VariationType,
+} from "@/lib/types";
 
-type Step = "upload" | "page-select" | "select" | "result";
-const STEPS: Step[] = ["upload", "page-select", "select", "result"];
+type Step = "upload" | "select" | "result";
+const STEPS: Step[] = ["upload", "select", "result"];
 const STEP_LABEL: Record<Step, { full: string; short?: string }> = {
     upload: { full: "PDF 업로드", short: "업로드" },
-    "page-select": { full: "페이지 선택", short: "페이지" },
     select: { full: "문제 선택", short: "문제" },
     result: { full: "변형문제", short: "변형" },
 };
@@ -47,29 +43,17 @@ const VARIATION_TYPE_OPTIONS: Array<{
     },
 ];
 
-const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 export default function MathPage() {
     const [step, setStep] = useState<Step>("upload");
     const [pdfFile, setPdfFile] = useState<File | null>(null);
-    const [extracting, setExtracting] = useState(false);
-    const [extractProgress, setExtractProgress] = useState({
-        current: 0,
-        total: 0,
-    });
-    const [extractMessage, setExtractMessage] = useState("");
 
-    const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
-    const [includeSolution, setIncludeSolution] = useState(false);
+    const [extracting, setExtracting] = useState(false);
+    const [extractMessage, setExtractMessage] = useState("");
 
     const [problems, setProblems] = useState<ExtractedProblem[]>([]);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
     const [generating, setGenerating] = useState(false);
-    const [variationProgress, setVariationProgress] = useState({
-        current: 0,
-        total: 0,
-    });
     const [variations, setVariations] = useState<MathVariation[]>([]);
     const [error, setError] = useState("");
 
@@ -78,7 +62,7 @@ export default function MathPage() {
     /* ── handlers ─────────────────────────────────────── */
 
     const handleFileSelect = async (
-        e: React.ChangeEvent<HTMLInputElement> | { target: { files: FileList } },
+        e: React.ChangeEvent<HTMLInputElement>,
     ) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -88,51 +72,47 @@ export default function MathPage() {
         }
         setError("");
         setPdfFile(file);
-
-        // Mock: 1.2초간 "썸네일 로드 중" 표시 후 page-select로 이동
-        setExtracting(true);
-        setExtractMessage("PDF 페이지 미리보기 로드 중...");
-        await delay(1200);
-        setExtracting(false);
-        setExtractMessage("");
-        setStep("page-select");
+        await extractProblems(file);
+        // 같은 파일 다시 선택할 수 있도록 input 초기화
+        if (fileInputRef.current) fileInputRef.current.value = "";
     };
 
-    const togglePageSelection = (pageNum: number) => {
-        setSelectedPages((prev) => {
-            const next = new Set(prev);
-            if (next.has(pageNum)) {
-                next.delete(pageNum);
-            } else if (next.size < 10) {
-                next.add(pageNum);
+    const extractProblems = async (file: File) => {
+        setExtracting(true);
+        setExtractMessage("PDF에서 문제를 추출하는 중...");
+        try {
+            const fd = new FormData();
+            fd.append("file", file);
+            const res = await fetch("/api/math/extract", {
+                method: "POST",
+                body: fd,
+            });
+            const json = (await res.json()) as {
+                success: boolean;
+                problems?: ExtractedProblem[];
+                error?: string;
+            };
+            if (!res.ok || !json.success || !json.problems) {
+                throw new Error(json.error ?? `HTTP ${res.status}`);
             }
-            return next;
-        });
-    };
-
-    const extractFromSelectedPages = async () => {
-        if (selectedPages.size === 0) return;
-        setExtracting(true);
-        const total = selectedPages.size;
-        setExtractProgress({ current: 0, total });
-
-        for (let i = 0; i < total; i++) {
-            setExtractMessage(`${i + 1}/${total} 페이지 AI 분석 중...`);
-            await delay(600);
-            setExtractProgress({ current: i + 1, total });
+            if (json.problems.length === 0) {
+                throw new Error(
+                    "PDF에서 문제를 찾지 못했어요. 문제가 또렷하게 보이는 PDF인지 확인해 주세요.",
+                );
+            }
+            setProblems(json.problems);
+            setSelectedIds(new Set(json.problems.map((p) => p.id)));
+            setStep("select");
+        } catch (e) {
+            setError(
+                e instanceof Error
+                    ? e.message
+                    : "문제 추출 중 오류가 발생했어요.",
+            );
+        } finally {
+            setExtracting(false);
+            setExtractMessage("");
         }
-
-        // Mock: 선택한 페이지 수에 비례해서 문제 가져오기
-        const take = Math.min(MOCK_EXTRACTED.length, selectedPages.size + 1);
-        const extracted: ExtractedProblem[] = MOCK_EXTRACTED.slice(0, take).map(
-            (p) => ({ ...p, variationType: "number" }),
-        );
-        setProblems(extracted);
-        setSelectedIds(new Set(extracted.map((p) => p.id)));
-        setExtractProgress({ current: 0, total: 0 });
-        setExtractMessage("");
-        setExtracting(false);
-        setStep("select");
     };
 
     const toggleProblem = (id: string) => {
@@ -166,31 +146,46 @@ export default function MathPage() {
         if (selectedIds.size === 0) return;
         const selected = problems.filter((p) => selectedIds.has(p.id));
         setGenerating(true);
-        const total = selected.length;
-        setVariationProgress({ current: 0, total });
-
-        const results: MathVariation[] = [];
-        for (let i = 0; i < total; i++) {
-            await delay(900);
-            const generated = generateMockVariations([selected[i]]);
-            results.push(...generated);
-            setVariationProgress({ current: i + 1, total });
+        setError("");
+        try {
+            const res = await fetch("/api/math/variations", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    problems: selected.map((p) => ({
+                        questionText: p.questionText,
+                        variationType: p.variationType,
+                    })),
+                }),
+            });
+            const json = (await res.json()) as {
+                success: boolean;
+                variations?: MathVariation[];
+                error?: string;
+            };
+            if (!res.ok || !json.success || !json.variations) {
+                throw new Error(json.error ?? `HTTP ${res.status}`);
+            }
+            setVariations(json.variations);
+            setStep("result");
+        } catch (e) {
+            setError(
+                e instanceof Error
+                    ? e.message
+                    : "변형 생성 중 오류가 발생했어요.",
+            );
+        } finally {
+            setGenerating(false);
         }
-        setVariations(results);
-        setVariationProgress({ current: 0, total: 0 });
-        setGenerating(false);
-        setStep("result");
     };
 
     const reset = () => {
         setStep("upload");
         setPdfFile(null);
-        setSelectedPages(new Set());
         setProblems([]);
         setSelectedIds(new Set());
         setVariations([]);
         setError("");
-        setIncludeSolution(false);
     };
 
     const stepIdx = STEPS.indexOf(step);
@@ -272,65 +267,18 @@ export default function MathPage() {
                 </div>
             )}
 
-            {/* Extract progress bar */}
-            {extractProgress.total > 0 && (
-                <div className="mb-6 bg-bg-1 rounded-xl p-4 shadow-xs border border-border-1">
-                    <div className="flex items-center justify-between text-sm mb-2">
-                        <span className="font-bold text-purple-600">
-                            📄 {extractMessage || "페이지 분석 중"}
-                        </span>
-                        <span className="text-fg-3 tabular-nums">
-                            {extractProgress.current}/{extractProgress.total}
-                        </span>
+            {/* Generating banner */}
+            {generating && (
+                <div className="mb-6 bg-bg-1 rounded-xl p-4 shadow-xs border border-border-1 flex items-center gap-3">
+                    <span className="animate-spin inline-block w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full" />
+                    <div>
+                        <p className="font-bold text-blue-600 text-sm">
+                            🔄 AI가 변형문제를 생성하고 있어요...
+                        </p>
+                        <p className="text-xs text-fg-4 mt-0.5">
+                            문제 수에 따라 10~30초 정도 걸릴 수 있어요.
+                        </p>
                     </div>
-                    <div className="w-full h-3 bg-bg-3 rounded-pill overflow-hidden">
-                        <div
-                            className="h-full rounded-pill transition-all duration-700 ease-out"
-                            style={{
-                                width: `${
-                                    (extractProgress.current /
-                                        extractProgress.total) *
-                                    100
-                                }%`,
-                                background:
-                                    "linear-gradient(90deg,#c084fc,#a855f7,#ec4899)",
-                            }}
-                        />
-                    </div>
-                </div>
-            )}
-
-            {/* Variation progress bar */}
-            {variationProgress.total > 0 && (
-                <div className="mb-6 bg-bg-1 rounded-xl p-4 shadow-xs border border-border-1">
-                    <div className="flex items-center justify-between text-sm mb-2">
-                        <span className="font-bold text-blue-600">
-                            🔄 {variationProgress.current}/
-                            {variationProgress.total}번째 문제 변형 생성 중...
-                        </span>
-                        <span className="text-fg-3 tabular-nums">
-                            {variationProgress.current}/
-                            {variationProgress.total}
-                        </span>
-                    </div>
-                    <div className="w-full h-3 bg-bg-3 rounded-pill overflow-hidden">
-                        <div
-                            className="h-full rounded-pill transition-all duration-700 ease-out"
-                            style={{
-                                width: `${
-                                    (variationProgress.current /
-                                        variationProgress.total) *
-                                    100
-                                }%`,
-                                background:
-                                    "linear-gradient(90deg,#60a5fa,#3b82f6,#6366f1)",
-                            }}
-                        />
-                    </div>
-                    <p className="text-xs text-fg-4 mt-1.5">
-                        AI가 변형문제를 생성하고 있습니다. 문제당 평균 10~20초
-                        소요됩니다.
-                    </p>
                 </div>
             )}
 
@@ -339,7 +287,9 @@ export default function MathPage() {
                 <section className="bg-bg-1 rounded-2xl shadow-xs border border-border-1 p-8">
                     <div
                         className="border-2 border-dashed border-purple-300 rounded-2xl p-12 text-center cursor-pointer hover:border-purple-500 hover:bg-purple-50/40 transition-colors"
-                        onClick={() => fileInputRef.current?.click()}
+                        onClick={() =>
+                            !extracting && fileInputRef.current?.click()
+                        }
                     >
                         <input
                             ref={fileInputRef}
@@ -353,6 +303,9 @@ export default function MathPage() {
                                 <div className="animate-spin w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full" />
                                 <p className="text-purple-600 font-bold">
                                     {extractMessage || "파일 분석 중..."}
+                                </p>
+                                <p className="text-xs text-fg-4">
+                                    PDF 페이지 수에 따라 시간이 걸릴 수 있어요.
                                 </p>
                             </div>
                         ) : (
@@ -376,16 +329,16 @@ export default function MathPage() {
                                     PDF 파일을 업로드하세요
                                 </p>
                                 <p className="text-sm text-fg-3">
-                                    시험지, 문제집 등에서 문제를 추출하여
-                                    변형합니다
+                                    시험지, 문제집 등에서 문제를 자동 추출하여
+                                    변형합니다 (최대 15MB)
                                 </p>
                             </>
                         )}
                     </div>
 
                     <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-fg-3">
-                        <Tip emoji="📄" title="페이지 단위 선택">
-                            업로드 후 변형하고 싶은 페이지만 골라서 처리해요.
+                        <Tip emoji="🔎" title="자동 문제 추출">
+                            PDF 전체를 AI가 읽어 문제만 골라냅니다.
                         </Tip>
                         <Tip emoji="🎯" title="변형 유형 지정">
                             문제마다 숫자/상황/논리/자동 변형을 선택할 수
@@ -399,143 +352,7 @@ export default function MathPage() {
                 </section>
             )}
 
-            {/* ── Step 2: Page Select ────────────────────────────── */}
-            {step === "page-select" && (
-                <section className="bg-bg-1 rounded-2xl shadow-xs border border-border-1 p-6">
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
-                        <div>
-                            <h3 className="font-bold text-fg-1 flex items-center gap-2">
-                                <PdfIcon />
-                                {pdfFile?.name ?? "업로드된 PDF"}
-                            </h3>
-                            <p className="text-sm text-fg-3 mt-0.5">
-                                {MOCK_TOTAL_PAGES}페이지 중 출제 페이지를
-                                선택하세요 (최대 10페이지)
-                            </p>
-                        </div>
-                        <div>
-                            <span
-                                className={`px-3 py-1 rounded-pill font-bold text-sm ${
-                                    selectedPages.size > 0
-                                        ? "bg-purple-100 text-purple-600"
-                                        : "bg-bg-3 text-fg-3"
-                                }`}
-                            >
-                                {selectedPages.size}/10 선택됨
-                            </span>
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 max-h-[400px] overflow-y-auto p-1">
-                        {Array.from({ length: MOCK_TOTAL_PAGES }).map((_, idx) => {
-                            const pageNum = idx + 1;
-                            const isSelected = selectedPages.has(pageNum);
-                            return (
-                                <div
-                                    key={pageNum}
-                                    onClick={() => togglePageSelection(pageNum)}
-                                    className={`relative cursor-pointer rounded-lg overflow-hidden border-2 transition-all aspect-[3/4] ${
-                                        isSelected
-                                            ? "border-purple-500 ring-2 ring-purple-300"
-                                            : "border-border-2 hover:border-purple-300"
-                                    }`}
-                                >
-                                    <PagePlaceholder pageNum={pageNum} />
-                                    <div
-                                        className={`absolute bottom-0 left-0 right-0 text-center py-1 text-xs font-bold ${
-                                            isSelected
-                                                ? "bg-purple-500 text-white"
-                                                : "bg-black/50 text-white"
-                                        }`}
-                                    >
-                                        {pageNum}페이지
-                                    </div>
-                                    {isSelected && (
-                                        <div className="absolute top-1.5 right-1.5 w-6 h-6 bg-purple-500 rounded-full flex items-center justify-center shadow">
-                                            <svg
-                                                width="14"
-                                                height="14"
-                                                viewBox="0 0 24 24"
-                                                fill="none"
-                                                stroke="white"
-                                                strokeWidth="3"
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                            >
-                                                <path d="M20 6L9 17l-5-5" />
-                                            </svg>
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </div>
-
-                    {/* Solution toggle */}
-                    <div
-                        className="mt-6 p-4 rounded-xl border"
-                        style={{
-                            background:
-                                "linear-gradient(90deg,#fffbeb,#fff7ed)",
-                            borderColor: "#fde68a",
-                        }}
-                    >
-                        <div className="flex items-center justify-between gap-3 flex-wrap">
-                            <div>
-                                <h4 className="font-bold text-amber-800 flex items-center gap-2">
-                                    📚 해설포함 (선택사항)
-                                </h4>
-                                <p className="text-sm text-amber-600">
-                                    원본 해설을 참고하여 풀이 품질을 높입니다
-                                </p>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => setIncludeSolution((v) => !v)}
-                                className={`px-4 py-2 rounded-pill font-bold text-sm transition-all ${
-                                    includeSolution
-                                        ? "bg-amber-500 text-white shadow"
-                                        : "bg-white text-amber-600 border-2 border-amber-300 hover:border-amber-400"
-                                }`}
-                            >
-                                {includeSolution
-                                    ? "✓ 해설포함 ON"
-                                    : "해설포함 OFF"}
-                            </button>
-                        </div>
-                    </div>
-
-                    <div className="flex gap-3 mt-6">
-                        <button
-                            type="button"
-                            onClick={reset}
-                            className="px-6 py-3 bg-bg-3 text-fg-2 rounded-xl font-bold hover:bg-bg-2 transition-colors"
-                        >
-                            뒤로
-                        </button>
-                        <button
-                            type="button"
-                            onClick={extractFromSelectedPages}
-                            disabled={selectedPages.size === 0 || extracting}
-                            className="flex-1 py-3 bg-purple-500 text-white rounded-xl font-bold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 hover:bg-purple-600 transition-colors"
-                        >
-                            {extracting ? (
-                                <>
-                                    <span className="animate-spin inline-block w-5 h-5 border-2 border-white border-t-transparent rounded-full" />
-                                    문제 추출 중...
-                                </>
-                            ) : (
-                                <>
-                                    ✨ 선택한 {selectedPages.size}페이지에서
-                                    문제 추출
-                                </>
-                            )}
-                        </button>
-                    </div>
-                </section>
-            )}
-
-            {/* ── Step 3: Select Problems ────────────────────────── */}
+            {/* ── Step 2: Select Problems ────────────────────────── */}
             {step === "select" && (
                 <section className="bg-bg-1 rounded-2xl shadow-xs border border-border-1 p-6">
                     <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-5">
@@ -581,7 +398,7 @@ export default function MathPage() {
                                 onClick={reset}
                                 className="px-3 py-1.5 bg-bg-3 hover:bg-bg-2 rounded-lg text-sm font-bold flex items-center gap-1 transition-colors"
                             >
-                                🗑 다시 선택
+                                🗑 다시 업로드
                             </button>
                         </div>
                     </div>
@@ -659,7 +476,7 @@ export default function MathPage() {
                                                 </select>
                                             </div>
                                             <p
-                                                className="mt-2 text-sm text-fg-2 leading-relaxed cursor-pointer"
+                                                className="mt-2 text-sm text-fg-2 leading-relaxed cursor-pointer whitespace-pre-wrap"
                                                 onClick={() =>
                                                     toggleProblem(problem.id)
                                                 }
@@ -693,7 +510,7 @@ export default function MathPage() {
                 </section>
             )}
 
-            {/* ── Step 4: Result ─────────────────────────────────── */}
+            {/* ── Step 3: Result ─────────────────────────────────── */}
             {step === "result" && (
                 <section className="bg-bg-1 rounded-2xl shadow-xs border border-border-1 p-6">
                     <div className="flex items-center justify-between gap-3 flex-wrap mb-5">
@@ -705,7 +522,7 @@ export default function MathPage() {
                                 type="button"
                                 onClick={() =>
                                     alert(
-                                        "PDF 다운로드는 백엔드 연동 후 지원됩니다.",
+                                        "PDF 다운로드는 추후 지원됩니다.",
                                     )
                                 }
                                 className="px-4 py-2 bg-purple-500 text-white rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-purple-600 transition-colors"
@@ -716,7 +533,7 @@ export default function MathPage() {
                                 type="button"
                                 onClick={() =>
                                     alert(
-                                        "HWPX 다운로드는 백엔드 연동 후 지원됩니다.",
+                                        "HWPX 다운로드는 추후 지원됩니다.",
                                     )
                                 }
                                 className="px-4 py-2 bg-blue-500 text-white rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-blue-600 transition-colors"
@@ -772,7 +589,7 @@ export default function MathPage() {
                                     <span className="bg-green-500 text-white px-2 py-1 rounded text-xs font-bold">
                                         정답
                                     </span>
-                                    <span className="text-green-700 font-bold">
+                                    <span className="text-green-700 font-bold whitespace-pre-wrap">
                                         {v.variationAnswer}
                                     </span>
                                 </div>
@@ -833,62 +650,6 @@ function PdfIcon() {
                 <path d="M14 2v6h6" />
             </svg>
         </span>
-    );
-}
-
-function PagePlaceholder({ pageNum }: { pageNum: number }) {
-    // SVG mock — looks like a faded scanned page with ruled lines.
-    return (
-        <svg
-            viewBox="0 0 240 320"
-            preserveAspectRatio="xMidYMid slice"
-            className="w-full h-full block"
-            aria-hidden
-        >
-            <rect width="240" height="320" fill="#ffffff" />
-            <rect width="240" height="320" fill="url(#pg-grad)" />
-            <defs>
-                <linearGradient
-                    id="pg-grad"
-                    x1="0"
-                    x2="0"
-                    y1="0"
-                    y2="1"
-                >
-                    <stop offset="0" stopColor="#fafafa" />
-                    <stop offset="1" stopColor="#f1f5f9" />
-                </linearGradient>
-            </defs>
-            <text
-                x="20"
-                y="38"
-                fontSize="14"
-                fontWeight="700"
-                fill="#9ca3af"
-                fontFamily="Pretendard, sans-serif"
-            >
-                p.{pageNum}
-            </text>
-            {Array.from({ length: 14 }).map((_, i) => (
-                <rect
-                    key={i}
-                    x="20"
-                    y={60 + i * 16}
-                    width={i % 3 === 0 ? 160 : 200}
-                    height="6"
-                    rx="3"
-                    fill="#e5e7eb"
-                />
-            ))}
-            <rect
-                x="20"
-                y={60 + 14 * 16}
-                width="80"
-                height="6"
-                rx="3"
-                fill="#e5e7eb"
-            />
-        </svg>
     );
 }
 
