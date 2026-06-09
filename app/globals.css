@@ -80,6 +80,10 @@
 }
 
 /* ── Base reset ─────────────────────────────────────────── */
+/* @layer base 로 감싸야 Tailwind 유틸리티(@layer utilities)가 이 리셋을 덮어쓸 수 있다.
+   특히 아래 button{background:none;border:none;padding:0} 가 unlayered 이면
+   bg-primary·border·padding 등 모든 버튼 유틸리티를 무조건 이겨버린다. */
+@layer base {
 *,
 *::before,
 *::after {
@@ -124,6 +128,7 @@ input,
 textarea,
 select {
     font-family: inherit;
+}
 }
 
 /* ── Print: hide chrome, keep content ────────────────────── */
