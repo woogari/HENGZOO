@@ -11,6 +11,7 @@ import {
     TextArea,
 } from "@/components/design-system";
 import { newSessionId, saveSession } from "@/lib/session";
+import { stashCareerFile } from "@/lib/careerHandoff";
 import type { Difficulty, QuestionFormat } from "@/lib/types";
 
 const formatOptions: Array<{ value: QuestionFormat; label: string }> = [
@@ -41,6 +42,7 @@ export default function CareerPage() {
         if (!canSubmit || submitting) return;
         setSubmitting(true);
         const id = newSessionId();
+        if (textbook) stashCareerFile(id, textbook);
         saveSession(id, {
             mode: "career",
             textbookFileName: textbook?.name ?? null,

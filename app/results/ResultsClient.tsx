@@ -13,9 +13,10 @@ import {
 } from "@/components/design-system";
 import {
     generateNumberVariations,
-    streamGenerateQuestions,
+    streamGenerateCareerQuestions,
 } from "@/lib/api";
 import { loadSession } from "@/lib/session";
+import { getCareerFile } from "@/lib/careerHandoff";
 import type {
     CareerSessionPayload,
     GeneratedQuestion,
@@ -93,13 +94,25 @@ export default function ResultsClient() {
                     if (!cancelled) setStatus("done");
                 } else {
                     const c = payload as CareerSessionPayload;
+                    const file = sessionId
+                        ? getCareerFile(sessionId)
+                        : null;
+                    if (!file) {
+                        setStatus("error");
+                        setError(
+                            "교과서 파일을 찾을 수 없어요. 새로고침했거나 직접 주소로 들어오면 파일이 사라져요. /career 에서 교과서를 다시 올려 주세요.",
+                        );
+                        return;
+                    }
                     setProgress({
                         current: 0,
                         total: c.request.questionCount,
-                        message: "수업 강조 내용을 학습하고 있어요...",
+                        message: "교과서를 읽고 있어요...",
                     });
                     setStatus("streaming");
-                    for await (const ev of streamGenerateQuestions(
+                    let terminal: Status | null = null;
+                    for await (const ev of streamGenerateCareerQuestions(
+                        file,
                         c.request,
                     )) {
                         if (cancelled) return;
@@ -134,14 +147,17 @@ export default function ResultsClient() {
                                     current: ev.data.totalGenerated,
                                     message: "완료",
                                 }));
+                                terminal = "done";
                                 setStatus("done");
                                 break;
                             case "batch_error":
                                 setError(ev.data.error);
+                                terminal = "error";
+                                setStatus("error");
                                 break;
                         }
                     }
-                    if (!cancelled && status !== "done") setStatus("done");
+                    if (!cancelled && terminal === null) setStatus("done");
                 }
             } catch (e) {
                 if (cancelled) return;

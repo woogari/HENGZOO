@@ -14,6 +14,43 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * 성직: 교과서 PDF + 옵션을 실제 Gemini 라우트로 보내 SSE 로 문제를 받는다.
+ * 교과서 파일이 있으면 항상 이 실제 경로를 쓴다 (mock 우회).
+ */
+export async function* streamGenerateCareerQuestions(
+    file: File,
+    req: GenerateQuestionsRequest,
+): AsyncGenerator<SSEEvent> {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append(
+        "payload",
+        JSON.stringify({
+            questionCount: req.questionCount,
+            questionFormat: req.questionFormat,
+            difficulty: req.difficulty,
+            customTopic: req.customTopic ?? "",
+        }),
+    );
+
+    const res = await fetch(`${API_BASE}/api/career/generate`, {
+        method: "POST",
+        body: fd,
+    });
+    if (!res.ok || !res.body) {
+        let msg = `HTTP ${res.status}`;
+        try {
+            const j = (await res.json()) as { error?: string };
+            if (j.error) msg = j.error;
+        } catch {
+            /* not json */
+        }
+        throw new Error(msg);
+    }
+    yield* parseSSE(res.body);
+}
+
+/**
  * 수학: 숫자 변형 (단발 응답).
  * Real backend: POST /api/exam-builder { action: "generate-wrong-variations", wrongProblems }
  */
