@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Hero } from "@/components/landing/Hero";
 import { SubjectCard } from "@/components/landing/SubjectCard";
 
@@ -12,7 +13,7 @@ export default function HomePage() {
                         과목을 선택해 보세요
                     </h2>
                     <p className="mt-2 text-base text-fg-3">
-                        두 가지 변형 엔진을 지원합니다.
+                        두 가지 변형 엔진과, 만든 문제를 검증하는 연구소를 지원합니다.
                     </p>
                 </div>
 
@@ -42,6 +43,28 @@ export default function HomePage() {
                         ]}
                     />
                 </div>
+
+                <Link
+                    href="/lab"
+                    className="mt-5 group flex flex-col sm:flex-row sm:items-center gap-4 bg-primary text-primary-on rounded-xl p-8 transition-all duration-150 hover:shadow-lg hover:-translate-y-0.5"
+                >
+                    <div className="w-12 h-12 rounded-lg bg-white/10 flex items-center justify-center text-2xl shrink-0">
+                        🔬
+                    </div>
+                    <div className="flex-1">
+                        <h3 className="text-xl font-bold tracking-snug">
+                            AI 출제 검증 연구소
+                        </h3>
+                        <p className="mt-1 text-base opacity-80 leading-relaxed">
+                            AI가 낸 문제, 믿어도 될까요? 다른 AI가 정답을 모른 채
+                            직접 풀어 보고(수학은 Python으로 계산), 답이 다르면
+                            걸러내고 고칩니다.
+                        </p>
+                    </div>
+                    <span className="text-sm font-medium opacity-90 group-hover:translate-x-0.5 transition-transform">
+                        시연해 보기 →
+                    </span>
+                </Link>
             </section>
         </div>
     );

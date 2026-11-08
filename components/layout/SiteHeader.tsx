@@ -32,6 +32,12 @@ export function SiteHeader() {
                     >
                         성공적인 직업생활
                     </Link>
+                    <Link
+                        href="/lab"
+                        className="px-3 h-9 inline-flex items-center text-sm font-medium text-fg-1 hover:bg-bg-2 rounded-md transition-colors"
+                    >
+                        검증 연구소
+                    </Link>
                 </nav>
             </div>
         </header>
