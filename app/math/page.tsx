@@ -1,7 +1,12 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { PageHeader } from "@/components/design-system";
+import {
+    AnswerModeToggle,
+    ExamHeader,
+    PageHeader,
+    type AnswerMode,
+} from "@/components/design-system";
 import type {
     ExtractedProblem,
     MathVariation,
@@ -55,6 +60,7 @@ export default function MathPage() {
 
     const [generating, setGenerating] = useState(false);
     const [variations, setVariations] = useState<MathVariation[]>([]);
+    const [answerMode, setAnswerMode] = useState<AnswerMode>("teacher");
     const [error, setError] = useState("");
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -193,7 +199,7 @@ export default function MathPage() {
     /* ── render ──────────────────────────────────────── */
 
     return (
-        <div className="max-w-5xl mx-auto px-6 py-12">
+        <div className="exam-sheet max-w-5xl mx-auto px-6 py-12">
             <PageHeader
                 title="📐 수학 변형문제 (PDF)"
                 description="시험지·문제집 PDF에서 문제를 추출하고, AI로 같은 유형의 변형 문제를 만들어드려요."
@@ -330,7 +336,7 @@ export default function MathPage() {
                                 </p>
                                 <p className="text-sm text-fg-3">
                                     시험지, 문제집 등에서 문제를 자동 추출하여
-                                    변형합니다 (최대 15MB)
+                                    변형합니다 · 용량 제한 없음
                                 </p>
                             </>
                         )}
@@ -344,9 +350,9 @@ export default function MathPage() {
                             문제마다 숫자/상황/논리/자동 변형을 선택할 수
                             있어요.
                         </Tip>
-                        <Tip emoji="📥" title="PDF · HWPX 다운로드">
-                            완성된 변형 문제집을 시험지 양식으로 받아갈 수
-                            있어요.
+                        <Tip emoji="📥" title="시험지 PDF 저장·인쇄">
+                            학생용·교사용(정답 포함)을 골라 시험지 양식으로
+                            뽑을 수 있어요.
                         </Tip>
                     </div>
                 </section>
@@ -512,40 +518,25 @@ export default function MathPage() {
 
             {/* ── Step 3: Result ─────────────────────────────────── */}
             {step === "result" && (
-                <section className="bg-bg-1 rounded-2xl shadow-xs border border-border-1 p-6">
-                    <div className="flex items-center justify-between gap-3 flex-wrap mb-5">
+                <section className="bg-bg-1 rounded-2xl shadow-xs border border-border-1 p-6 print:border-0 print:shadow-none print:p-0">
+                    <div
+                        className="flex items-center justify-between gap-3 flex-wrap mb-5"
+                        data-print-hide
+                    >
                         <h3 className="font-bold text-fg-1 text-lg">
                             📝 변형문제 {variations.length}개 생성 완료!
                         </h3>
-                        <div className="flex flex-wrap gap-2" data-print-hide>
-                            <button
-                                type="button"
-                                onClick={() =>
-                                    alert(
-                                        "PDF 다운로드는 추후 지원됩니다.",
-                                    )
-                                }
-                                className="px-4 py-2 bg-purple-500 text-white rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-purple-600 transition-colors"
-                            >
-                                ⬇ PDF 다운로드
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() =>
-                                    alert(
-                                        "HWPX 다운로드는 추후 지원됩니다.",
-                                    )
-                                }
-                                className="px-4 py-2 bg-blue-500 text-white rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-blue-600 transition-colors"
-                            >
-                                📄 HWPX 다운로드
-                            </button>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <AnswerModeToggle
+                                value={answerMode}
+                                onChange={setAnswerMode}
+                            />
                             <button
                                 type="button"
                                 onClick={() => window.print()}
-                                className="px-4 py-2 bg-bg-3 text-fg-2 rounded-xl font-bold text-sm hover:bg-bg-2 transition-colors"
+                                className="px-4 py-2 bg-purple-500 text-white rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-purple-600 transition-colors"
                             >
-                                인쇄
+                                ⬇ PDF로 저장 · 인쇄
                             </button>
                             <button
                                 type="button"
@@ -557,11 +548,17 @@ export default function MathPage() {
                         </div>
                     </div>
 
+                    <ExamHeader
+                        title="수학 · 변형 문제"
+                        count={variations.length}
+                        mode={answerMode}
+                    />
+
                     <div className="space-y-4">
                         {variations.map((v, i) => (
                             <article
                                 key={i}
-                                className="border-2 border-border-1 rounded-xl p-5 hover:border-purple-200 transition-colors"
+                                className="exam-avoid-break border-2 border-border-1 rounded-xl p-5 hover:border-purple-200 transition-colors print:border-border-2"
                             >
                                 <div className="flex items-center gap-2 mb-3 flex-wrap">
                                     <span className="bg-purple-500 text-white px-3 py-1 rounded-pill text-sm font-bold">
@@ -584,25 +581,29 @@ export default function MathPage() {
                                     </p>
                                 </div>
 
-                                {/* 정답 */}
-                                <div className="flex items-center gap-2 mb-3">
-                                    <span className="bg-green-500 text-white px-2 py-1 rounded text-xs font-bold">
-                                        정답
-                                    </span>
-                                    <span className="text-green-700 font-bold whitespace-pre-wrap">
-                                        {v.variationAnswer}
-                                    </span>
-                                </div>
+                                {answerMode === "teacher" && (
+                                    <>
+                                        {/* 정답 */}
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <span className="bg-green-500 text-white px-2 py-1 rounded text-xs font-bold">
+                                                정답
+                                            </span>
+                                            <span className="text-green-700 font-bold whitespace-pre-wrap">
+                                                {v.variationAnswer}
+                                            </span>
+                                        </div>
 
-                                {/* 풀이 */}
-                                <div className="bg-bg-2 rounded-lg p-4 print:bg-transparent print:border print:border-border-1">
-                                    <div className="text-xs text-fg-3 mb-2 font-bold">
-                                        📝 풀이
-                                    </div>
-                                    <p className="text-sm text-fg-2 leading-relaxed whitespace-pre-wrap">
-                                        {v.explanation}
-                                    </p>
-                                </div>
+                                        {/* 풀이 */}
+                                        <div className="bg-bg-2 rounded-lg p-4 print:bg-transparent print:border print:border-border-1">
+                                            <div className="text-xs text-fg-3 mb-2 font-bold">
+                                                📝 풀이
+                                            </div>
+                                            <p className="text-sm text-fg-2 leading-relaxed whitespace-pre-wrap">
+                                                {v.explanation}
+                                            </p>
+                                        </div>
+                                    </>
+                                )}
                             </article>
                         ))}
                     </div>

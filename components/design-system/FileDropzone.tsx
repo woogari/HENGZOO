@@ -16,7 +16,7 @@ export function FileDropzone({
     file,
     onChange,
     label = "교과서 업로드 (PDF)",
-    hint = "PDF 파일을 끌어 놓거나 클릭해서 선택하세요 (최대 20MB)",
+    hint = "PDF 파일을 끌어 놓거나 클릭해서 선택하세요",
 }: Props) {
     const inputRef = useRef<HTMLInputElement>(null);
     const [dragOver, setDragOver] = useState(false);

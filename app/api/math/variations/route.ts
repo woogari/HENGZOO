@@ -1,9 +1,10 @@
-import { Type } from "@google/genai";
-import { getGemini, GEMINI_MODEL } from "@/lib/gemini";
+import { z } from "zod";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import { getAnthropic, CLAUDE_MODEL, CLAUDE_EFFORT } from "@/lib/anthropic";
 import type { VariationType } from "@/lib/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 180;
 
 interface ReqProblem {
     questionText: string;
@@ -18,30 +19,18 @@ const TYPE_GUIDE: Record<VariationType, string> = {
     auto: "문제 특성에 맞는 가장 자연스러운 변형 방식을 스스로 선택한다.",
 };
 
-const SCHEMA = {
-    type: Type.ARRAY,
-    items: {
-        type: Type.OBJECT,
-        properties: {
-            originalQuestion: { type: Type.STRING },
-            variationQuestion: { type: Type.STRING },
-            variationAnswer: { type: Type.STRING },
-            explanation: { type: Type.STRING },
-            difficulty: {
-                type: Type.STRING,
-                enum: ["easy", "medium", "hard"],
-            },
-            changedElement: { type: Type.STRING },
-        },
-        required: [
-            "originalQuestion",
-            "variationQuestion",
-            "variationAnswer",
-            "explanation",
-            "difficulty",
-        ],
-    },
-} as const;
+const VariationSchema = z.object({
+    variations: z.array(
+        z.object({
+            originalQuestion: z.string(),
+            variationQuestion: z.string(),
+            variationAnswer: z.string(),
+            explanation: z.string(),
+            difficulty: z.enum(["easy", "medium", "hard"]),
+            changedElement: z.string().nullable(),
+        }),
+    ),
+});
 
 export async function POST(req: Request) {
     try {
@@ -70,7 +59,7 @@ export async function POST(req: Request) {
 ${list}
 
 규칙:
-- 입력 순서 그대로, 같은 개수(${problems.length}개)의 변형 문제를 배열로 반환한다.
+- 입력 순서 그대로, 같은 개수(${problems.length}개)의 변형 문제를 variations 배열로 반환한다.
 - 각 문제의 지정된 변형방식을 따른다.
 - 같은 단원·개념·유형을 유지하고, 난이도는 원본과 비슷하게 한다.
 - variationAnswer 는 반드시 정확하게 계산한 정답을 넣는다. 계산을 틀리지 마라.
@@ -79,30 +68,29 @@ ${list}
 - changedElement 에는 무엇을 바꿨는지 짧게(예: "계수 변경", "상황 변경") 적는다.
 - difficulty 는 easy / medium / hard 중 하나.`;
 
-        const ai = getGemini();
-        const res = await ai.models.generateContent({
-            model: GEMINI_MODEL,
-            contents: [{ role: "user", parts: [{ text: prompt }] }],
-            config: {
-                temperature: 0.7,
-                responseMimeType: "application/json",
-                responseSchema: SCHEMA,
+        const ai = getAnthropic();
+        const res = await ai.messages.parse({
+            model: CLAUDE_MODEL,
+            max_tokens: 16000,
+            output_config: {
+                effort: CLAUDE_EFFORT,
+                format: zodOutputFormat(VariationSchema),
             },
+            messages: [{ role: "user", content: prompt }],
         });
 
-        const text = res.text;
-        if (!text) {
+        const parsed = res.parsed_output;
+        if (!parsed) {
             return Response.json(
                 {
                     success: false,
-                    error: "Gemini가 빈 응답을 반환했어요. 다시 시도해 주세요.",
+                    error: "변형 문제를 만들지 못했어요. 다시 시도해 주세요.",
                 },
                 { status: 502 },
             );
         }
 
-        const variations = JSON.parse(text);
-        return Response.json({ success: true, variations });
+        return Response.json({ success: true, variations: parsed.variations });
     } catch (e) {
         const error =
             e instanceof Error ? e.message : "변형 생성 중 오류가 발생했어요.";

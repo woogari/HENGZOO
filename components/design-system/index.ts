@@ -9,3 +9,6 @@ export { FileDropzone } from "./FileDropzone";
 export { ProgressBar } from "./ProgressBar";
 export { QuestionCard } from "./QuestionCard";
 export { QuestionSkeleton } from "./QuestionSkeleton";
+export { AnswerModeToggle } from "./AnswerModeToggle";
+export type { AnswerMode } from "./AnswerModeToggle";
+export { ExamHeader } from "./ExamHeader";

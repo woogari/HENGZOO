@@ -11,11 +11,18 @@ interface QuestionCardData {
     explanation?: string;
 }
 
-export function QuestionCard({ q }: { q: QuestionCardData }) {
+export function QuestionCard({
+    q,
+    showAnswer = true,
+}: {
+    q: QuestionCardData;
+    showAnswer?: boolean;
+}) {
     const [open, setOpen] = useState(false);
+    const hasAnswer = showAnswer && (q.answer || q.explanation);
 
     return (
-        <article className="bg-bg-1 border border-border-1 rounded-lg p-6 shadow-xs print:shadow-none print:border-border-2">
+        <article className="exam-avoid-break bg-bg-1 border border-border-1 rounded-lg p-6 shadow-xs print:shadow-none print:border-border-2">
             <div className="flex items-baseline gap-3 mb-3">
                 <span className="text-sm font-bold text-primary tabular-nums">
                     {String(q.order).padStart(2, "0")}
@@ -43,7 +50,7 @@ export function QuestionCard({ q }: { q: QuestionCardData }) {
                 </ol>
             )}
 
-            {(q.answer || q.explanation) && (
+            {hasAnswer && (
                 <>
                     <button
                         type="button"

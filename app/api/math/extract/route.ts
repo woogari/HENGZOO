@@ -1,10 +1,16 @@
-import { Type } from "@google/genai";
-import { getGemini, GEMINI_MODEL } from "@/lib/gemini";
+import { z } from "zod";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import {
+    getAnthropic,
+    CLAUDE_MODEL,
+    CLAUDE_EFFORT,
+    PDF_MAX_BYTES,
+    uploadPdfFile,
+    pdfErrorMessage,
+} from "@/lib/anthropic";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
-
-const MAX_BYTES = 15 * 1024 * 1024; // 15MB
+export const maxDuration = 120;
 
 const EXTRACT_PROMPT = `너는 한국 고등학교 수학 시험지·문제집 PDF에서 "문제"만 정확히 뽑아내는 도구다.
 
@@ -15,12 +21,16 @@ const EXTRACT_PROMPT = `너는 한국 고등학교 수학 시험지·문제집 P
 - 정답, 해설, 채점 기준, 페이지 머리말/꼬리말, 출처 표기는 문제 본문에서 제외한다.
 - 보기(①②③④⑤)가 있으면 문제 본문에 함께 포함한다.
 - questionNumber 는 시험지에 인쇄된 문제 번호를 쓰고, 번호가 없으면 등장 순서대로 1부터 매긴다.
-- 문제가 하나도 없으면 빈 배열을 반환한다.`;
+- 문제가 하나도 없으면 problems 를 빈 배열로 반환한다.`;
 
-interface RawProblem {
-    questionNumber?: number;
-    questionText: string;
-}
+const ExtractSchema = z.object({
+    problems: z.array(
+        z.object({
+            questionNumber: z.number().int().nullable(),
+            questionText: z.string(),
+        }),
+    ),
+});
 
 export async function POST(req: Request) {
     try {
@@ -42,65 +52,53 @@ export async function POST(req: Request) {
                 { status: 400 },
             );
         }
-        if (file.size > MAX_BYTES) {
+        if (file.size > PDF_MAX_BYTES) {
             return Response.json(
                 {
                     success: false,
-                    error: "PDF가 너무 커요 (최대 15MB). 페이지를 나눠서 올려 주세요.",
+                    error: "PDF 한 개 용량은 500MB까지만 올릴 수 있어요.",
                 },
                 { status: 400 },
             );
         }
 
-        const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
-        const ai = getGemini();
+        // Files API 로 업로드 → file_id 참조(요청 바디 32MB 제한 우회).
+        const fileId = await uploadPdfFile(file);
+        const ai = getAnthropic();
 
-        const res = await ai.models.generateContent({
-            model: GEMINI_MODEL,
-            contents: [
+        const res = await ai.messages.parse({
+            model: CLAUDE_MODEL,
+            max_tokens: 16000,
+            output_config: {
+                effort: CLAUDE_EFFORT,
+                format: zodOutputFormat(ExtractSchema),
+            },
+            messages: [
                 {
                     role: "user",
-                    parts: [
+                    content: [
                         {
-                            inlineData: {
-                                mimeType: "application/pdf",
-                                data: base64,
-                            },
+                            type: "document",
+                            source: { type: "file", file_id: fileId },
                         },
-                        { text: EXTRACT_PROMPT },
+                        { type: "text", text: EXTRACT_PROMPT },
                     ],
                 },
             ],
-            config: {
-                temperature: 0.1,
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.ARRAY,
-                    items: {
-                        type: Type.OBJECT,
-                        properties: {
-                            questionNumber: { type: Type.INTEGER },
-                            questionText: { type: Type.STRING },
-                        },
-                        required: ["questionText"],
-                    },
-                },
-            },
         });
 
-        const text = res.text;
-        if (!text) {
+        const parsed = res.parsed_output;
+        if (!parsed) {
             return Response.json(
                 {
                     success: false,
-                    error: "Gemini가 빈 응답을 반환했어요. 다시 시도해 주세요.",
+                    error: "문제를 읽어오지 못했어요. 다시 시도해 주세요.",
                 },
                 { status: 502 },
             );
         }
 
-        const raw = JSON.parse(text) as RawProblem[];
-        const problems = raw
+        const problems = parsed.problems
             .filter((p) => p.questionText?.trim())
             .map((p, i) => ({
                 id: `p${i + 1}`,
@@ -111,8 +109,9 @@ export async function POST(req: Request) {
 
         return Response.json({ success: true, problems });
     } catch (e) {
-        const error =
-            e instanceof Error ? e.message : "문제 추출 중 오류가 발생했어요.";
-        return Response.json({ success: false, error }, { status: 500 });
+        return Response.json(
+            { success: false, error: pdfErrorMessage(e) },
+            { status: 500 },
+        );
     }
 }

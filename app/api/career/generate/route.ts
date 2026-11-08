@@ -1,5 +1,13 @@
-import { Type } from "@google/genai";
-import { getGemini, GEMINI_MODEL } from "@/lib/gemini";
+import { z } from "zod";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import {
+    getAnthropic,
+    CLAUDE_MODEL,
+    CLAUDE_EFFORT,
+    PDF_MAX_BYTES,
+    uploadPdfFile,
+    pdfErrorMessage,
+} from "@/lib/anthropic";
 import type {
     Difficulty,
     GeneratedQuestion,
@@ -8,8 +16,6 @@ import type {
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
-
-const MAX_BYTES = 100 * 1024 * 1024; // 100MB (교과서는 보통 큼)
 
 interface CareerReq {
     questionCount: number;
@@ -20,11 +26,11 @@ interface CareerReq {
 
 const FORMAT_GUIDE: Record<QuestionFormat, string> = {
     multiple_choice:
-        "5지선다 객관식. choices 배열에 보기 5개를 넣고, answer 에는 정답 보기 기호(①②③④⑤ 중 하나)를 넣는다.",
+        "5지선다 객관식. choices 배열에는 보기 5개의 **내용만** 넣는다. ①②③④⑤ 같은 번호 기호를 보기 앞에 붙이지 마라(번호는 화면에서 자동으로 붙는다). answer 에는 정답 보기의 기호 하나만 넣는다(①②③④⑤ 중 하나).",
     short_answer:
         "단답형. choices 는 빈 배열로 두고, answer 에는 핵심 정답 단어/구절을 넣는다.",
     csat_style:
-        "수능형. 지문·자료(<보기> 등)를 활용한 5지선다로 출제한다. choices 5개와 정답 기호(①~⑤)를 넣는다.",
+        "수능형. 지문·자료(<보기> 등)를 활용한 5지선다로 출제한다. choices 배열에는 보기 5개의 내용만 넣고(①②③④⑤ 번호를 붙이지 마라), answer 에는 정답 기호 하나만 넣는다(①~⑤).",
 };
 
 const DIFFICULTY_GUIDE: Record<Difficulty, string> = {
@@ -34,28 +40,17 @@ const DIFFICULTY_GUIDE: Record<Difficulty, string> = {
     killer: "함정 보기와 복합 추론이 필요한 최고 난도 수준.",
 };
 
-const SCHEMA = {
-    type: Type.ARRAY,
-    items: {
-        type: Type.OBJECT,
-        properties: {
-            content: { type: Type.STRING },
-            choices: { type: Type.ARRAY, items: { type: Type.STRING } },
-            answer: { type: Type.STRING },
-            explanation: { type: Type.STRING },
-            points: { type: Type.INTEGER },
-        },
-        required: ["content", "answer", "explanation"],
-    },
-} as const;
-
-interface RawQuestion {
-    content?: string;
-    choices?: string[];
-    answer?: string;
-    explanation?: string;
-    points?: number;
-}
+const CareerSchema = z.object({
+    questions: z.array(
+        z.object({
+            content: z.string(),
+            choices: z.array(z.string()),
+            answer: z.string(),
+            explanation: z.string(),
+            points: z.number().int(),
+        }),
+    ),
+});
 
 function buildPrompt(req: CareerReq): string {
     const count = Math.max(1, Math.min(req.questionCount, 30));
@@ -80,7 +75,7 @@ function buildPrompt(req: CareerReq): string {
 [선생님 지시사항 / 수업 강조 내용]
 ${topic ? topic : "(특별한 지시 없음 — 교과서 전체에서 핵심 개념을 균형 있게 출제)"}
 
-위 규칙을 지켜 JSON 배열로만 응답하라.`;
+위 규칙을 지켜 questions 배열로만 응답하라.`;
 }
 
 function sse(event: string, data: unknown): string {
@@ -116,9 +111,12 @@ export async function POST(req: Request) {
             { status: 400 },
         );
     }
-    if (file.size > MAX_BYTES) {
+    if (file.size > PDF_MAX_BYTES) {
         return Response.json(
-            { success: false, error: "교과서 PDF가 너무 커요 (최대 100MB)." },
+            {
+                success: false,
+                error: "PDF 한 개 용량은 500MB까지만 올릴 수 있어요.",
+            },
             { status: 400 },
         );
     }
@@ -145,7 +143,7 @@ export async function POST(req: Request) {
                 controller.enqueue(encoder.encode(sse(event, data)));
 
             try {
-                const ai = getGemini();
+                const ai = getAnthropic();
 
                 send("init", {
                     title,
@@ -158,28 +156,11 @@ export async function POST(req: Request) {
                     totalBatches: 1,
                     generatedSoFar: 0,
                     totalQuestions: total,
-                    message: "교과서를 업로드하고 있어요...",
+                    message: "교과서를 읽고 있어요...",
                 });
 
-                // 큰 교과서도 처리할 수 있게 Files API 로 업로드.
-                const uploaded = await ai.files.upload({
-                    file,
-                    config: { mimeType: "application/pdf" },
-                });
-
-                // 파일이 ACTIVE 가 될 때까지 대기 (PDF 는 보통 빠름).
-                let info = uploaded;
-                let waited = 0;
-                while (info.state === "PROCESSING" && waited < 60_000) {
-                    await new Promise((r) => setTimeout(r, 1500));
-                    waited += 1500;
-                    info = await ai.files.get({ name: uploaded.name as string });
-                }
-                if (info.state === "FAILED" || !info.uri) {
-                    throw new Error(
-                        "교과서 PDF 처리에 실패했어요. 다른 PDF로 다시 시도해 주세요.",
-                    );
-                }
+                // Files API 로 업로드 → file_id 참조(요청 바디 32MB 제한 우회).
+                const fileId = await uploadPdfFile(file);
 
                 send("progress", {
                     batch: 1,
@@ -189,41 +170,42 @@ export async function POST(req: Request) {
                     message: "교과서를 읽고 문제를 만들고 있어요...",
                 });
 
-                const res = await ai.models.generateContent({
-                    model: GEMINI_MODEL,
-                    contents: [
+                const res = await ai.messages.parse({
+                    model: CLAUDE_MODEL,
+                    max_tokens: 16000,
+                    output_config: {
+                        effort: CLAUDE_EFFORT,
+                        format: zodOutputFormat(CareerSchema),
+                    },
+                    messages: [
                         {
                             role: "user",
-                            parts: [
+                            content: [
                                 {
-                                    fileData: {
-                                        fileUri: info.uri,
-                                        mimeType: "application/pdf",
-                                    },
+                                    type: "document",
+                                    source: { type: "file", file_id: fileId },
                                 },
-                                { text: buildPrompt(parsed) },
+                                { type: "text", text: buildPrompt(parsed) },
                             ],
                         },
                     ],
-                    config: {
-                        temperature: 0.7,
-                        responseMimeType: "application/json",
-                        responseSchema: SCHEMA,
-                    },
                 });
 
-                const text = res.text;
-                if (!text) throw new Error("Gemini가 빈 응답을 반환했어요.");
+                const out = res.parsed_output;
+                if (!out) {
+                    throw new Error(
+                        "교과서에서 문제를 만들지 못했어요. 텍스트가 또렷한 PDF인지 확인해 주세요.",
+                    );
+                }
 
-                const raw = JSON.parse(text) as RawQuestion[];
-                const questions: GeneratedQuestion[] = raw
+                const questions: GeneratedQuestion[] = out.questions
                     .filter((q) => q.content?.trim() && q.answer?.trim())
                     .slice(0, total)
                     .map((q, i) => ({
                         order: i + 1,
-                        content: q.content!.trim(),
+                        content: q.content.trim(),
                         choices: Array.isArray(q.choices) ? q.choices : [],
-                        answer: q.answer!.trim(),
+                        answer: q.answer.trim(),
                         explanation: q.explanation?.trim() ?? "",
                         points: q.points ?? 5,
                         type:
@@ -250,19 +232,12 @@ export async function POST(req: Request) {
                     totalRequested: total,
                     questions,
                 });
-
-                // 업로드한 파일 정리 (실패해도 무시).
-                try {
-                    await ai.files.delete({ name: uploaded.name as string });
-                } catch {
-                    /* noop */
-                }
             } catch (e) {
-                const error =
-                    e instanceof Error
-                        ? e.message
-                        : "문제 생성 중 오류가 발생했어요.";
-                send("batch_error", { batch: 1, error, generatedSoFar: 0 });
+                send("batch_error", {
+                    batch: 1,
+                    error: pdfErrorMessage(e),
+                    generatedSoFar: 0,
+                });
             } finally {
                 controller.close();
             }

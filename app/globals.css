@@ -133,6 +133,10 @@ select {
 
 /* ── Print: hide chrome, keep content ────────────────────── */
 @media print {
+    @page {
+        size: A4;
+        margin: 16mm 14mm;
+    }
     body {
         background: #ffffff;
     }
@@ -141,6 +145,15 @@ select {
     }
     .no-print {
         display: none !important;
+    }
+    /* 시험지: 한 문항이 페이지 경계에서 잘리지 않도록 */
+    .exam-avoid-break {
+        break-inside: avoid;
+    }
+    /* 인쇄 시 컨테이너 폭 제한 해제 */
+    .exam-sheet {
+        max-width: none !important;
+        padding: 0 !important;
     }
 }
 

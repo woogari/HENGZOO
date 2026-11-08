@@ -4,12 +4,15 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
+    AnswerModeToggle,
     AppBadge,
     AppButton,
+    ExamHeader,
     PageHeader,
     ProgressBar,
     QuestionCard,
     QuestionSkeleton,
+    type AnswerMode,
 } from "@/components/design-system";
 import {
     generateNumberVariations,
@@ -42,6 +45,7 @@ export default function ResultsClient() {
         message: "준비 중...",
     });
     const [questions, setQuestions] = useState<GeneratedQuestion[]>([]);
+    const [answerMode, setAnswerMode] = useState<AnswerMode>("teacher");
 
     const payload = useMemo<SessionPayload | null>(() => {
         if (!sessionId) return null;
@@ -187,33 +191,26 @@ export default function ResultsClient() {
         mode === "math" ? "수학 (숫자 변형)" : "성공적인 직업생활";
 
     return (
-        <div className="max-w-3xl mx-auto px-6 py-12">
+        <div className="exam-sheet max-w-3xl mx-auto px-6 py-12">
             <PageHeader
                 title="변형 문제집"
                 description={`${subject} · ${questions.length}문항 생성`}
                 backHref={mode === "math" ? "/math" : "/career"}
                 actions={
-                    <>
-                        <AppButton
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => window.print()}
-                            disabled={status !== "done"}
-                        >
-                            인쇄
-                        </AppButton>
-                        <AppButton
-                            size="sm"
-                            onClick={() =>
-                                alert(
-                                    "PDF 다운로드는 백엔드 연동 후 지원될 예정입니다.",
-                                )
-                            }
-                            disabled={status !== "done"}
-                        >
-                            PDF 다운로드
-                        </AppButton>
-                    </>
+                    status === "done" ? (
+                        <>
+                            <AnswerModeToggle
+                                value={answerMode}
+                                onChange={setAnswerMode}
+                            />
+                            <AppButton
+                                size="sm"
+                                onClick={() => window.print()}
+                            >
+                                PDF로 저장 · 인쇄
+                            </AppButton>
+                        </>
+                    ) : null
                 }
             />
 
@@ -245,9 +242,21 @@ export default function ResultsClient() {
                 </div>
             )}
 
+            {status === "done" && questions.length > 0 && (
+                <ExamHeader
+                    title="성공적인 직업생활 · 변형 문제"
+                    count={questions.length}
+                    mode={answerMode}
+                />
+            )}
+
             <div className="space-y-4">
                 {questions.map((q) => (
-                    <QuestionCard key={q.order} q={q} />
+                    <QuestionCard
+                        key={q.order}
+                        q={q}
+                        showAnswer={answerMode === "teacher"}
+                    />
                 ))}
 
                 {status === "streaming" &&
