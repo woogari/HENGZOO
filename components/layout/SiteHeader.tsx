@@ -30,7 +30,7 @@ export function SiteHeader() {
                         href="/career"
                         className="px-3 h-9 inline-flex items-center text-sm text-fg-2 hover:text-fg-1 hover:bg-bg-2 rounded-md transition-colors"
                     >
-                        성공적인 직업생활
+                        교과서
                     </Link>
                     <Link
                         href="/lab"

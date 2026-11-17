@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     AppButton,
     NumberInput,
@@ -11,6 +11,13 @@ import {
 } from "@/components/design-system";
 import { newSessionId, saveSession } from "@/lib/session";
 import { stashCareerFile } from "@/lib/careerHandoff";
+import {
+    CUSTOM_SUBJECT_ID,
+    NOTE_IMAGE_MAX_BYTES,
+    NOTE_IMAGE_MAX_COUNT,
+    NOTE_IMAGE_TYPES,
+    SUBJECTS,
+} from "@/lib/subjects";
 import type { Difficulty, QuestionFormat } from "@/lib/types";
 
 interface OutlineUnit {
@@ -25,6 +32,11 @@ const STEP_LABEL: Record<Step, string> = {
     config: "목차·범위 선택",
     result: "변형문제",
 };
+
+const subjectOptions = [
+    ...SUBJECTS.map((s) => ({ value: s.id, label: s.name })),
+    { value: CUSTOM_SUBJECT_ID, label: "직접 입력" },
+];
 
 const formatOptions: Array<{ value: QuestionFormat; label: string }> = [
     { value: "multiple_choice", label: "5지선다" },
@@ -42,6 +54,9 @@ export default function CareerPage() {
     const router = useRouter();
 
     const [step, setStep] = useState<Step>("upload");
+    const [subjectId, setSubjectId] = useState(SUBJECTS[0].id);
+    const [customSubject, setCustomSubject] = useState("");
+    const [noteImages, setNoteImages] = useState<File[]>([]);
     const [textbook, setTextbook] = useState<File | null>(null);
     const [extracting, setExtracting] = useState(false);
     const [outline, setOutline] = useState<OutlineUnit[]>([]);
@@ -54,12 +69,63 @@ export default function CareerPage() {
     const [error, setError] = useState("");
 
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const imageInputRef = useRef<HTMLInputElement>(null);
+
+    const subjectName =
+        subjectId === CUSTOM_SUBJECT_ID
+            ? customSubject.trim()
+            : (SUBJECTS.find((s) => s.id === subjectId)?.name ?? "");
+
+    // 필기 사진 미리보기 URL (언마운트/변경 시 해제)
+    const imagePreviews = useMemo(
+        () => noteImages.map((f) => URL.createObjectURL(f)),
+        [noteImages],
+    );
+    useEffect(
+        () => () => imagePreviews.forEach((u) => URL.revokeObjectURL(u)),
+        [imagePreviews],
+    );
+
+    const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(e.target.files ?? []);
+        if (imageInputRef.current) imageInputRef.current.value = "";
+        if (files.length === 0) return;
+        const bad = files.find(
+            (f) =>
+                !(NOTE_IMAGE_TYPES as readonly string[]).includes(f.type),
+        );
+        if (bad) {
+            setError(`${bad.name}: JPG·PNG·WEBP 사진만 올릴 수 있어요.`);
+            return;
+        }
+        const big = files.find((f) => f.size > NOTE_IMAGE_MAX_BYTES);
+        if (big) {
+            setError(`${big.name}: 사진 한 장은 5MB까지만 올릴 수 있어요.`);
+            return;
+        }
+        if (noteImages.length + files.length > NOTE_IMAGE_MAX_COUNT) {
+            setError(
+                `필기 사진은 최대 ${NOTE_IMAGE_MAX_COUNT}장까지 올릴 수 있어요.`,
+            );
+            return;
+        }
+        setError("");
+        setNoteImages((prev) => [...prev, ...files]);
+    };
+
+    const removeImage = (idx: number) =>
+        setNoteImages((prev) => prev.filter((_, i) => i !== idx));
 
     const handleFileSelect = async (
         e: React.ChangeEvent<HTMLInputElement>,
     ) => {
         const file = e.target.files?.[0];
         if (!file) return;
+        if (!subjectName) {
+            setError("과목명을 입력해 주세요.");
+            if (fileInputRef.current) fileInputRef.current.value = "";
+            return;
+        }
         if (!file.name.toLowerCase().endsWith(".pdf")) {
             setError("PDF 파일만 업로드할 수 있어요.");
             return;
@@ -74,6 +140,7 @@ export default function CareerPage() {
         try {
             const fd = new FormData();
             fd.append("file", file);
+            fd.append("subject", subjectName);
             const res = await fetch("/api/career/outline", {
                 method: "POST",
                 body: fd,
@@ -121,14 +188,14 @@ export default function CareerPage() {
         setError("");
     };
 
-    const canSubmit =
-        !!textbook && (selected.size > 0 || emphasis.trim().length > 0);
+    // 단원 선택·강조 내용·필기 사진은 모두 선택 사항. 교과서만 있으면 출제 가능.
+    const canSubmit = !!textbook && !!subjectName;
 
     const onSubmit = () => {
         if (!canSubmit || submitting) return;
         setSubmitting(true);
         const id = newSessionId();
-        if (textbook) stashCareerFile(id, textbook);
+        if (textbook) stashCareerFile(id, textbook, noteImages);
 
         const scopeBlock =
             selected.size > 0
@@ -146,9 +213,11 @@ export default function CareerPage() {
             textbookFileSize: textbook?.size ?? null,
             emphasis: emphasis.trim(),
             pastExam: "",
+            subject: subjectName,
+            noteImageCount: noteImages.length,
             request: {
                 category: "career",
-                selectedSubjects: ["career-textbook"],
+                selectedSubjects: [subjectName],
                 selectedUnits: selected.size > 0 ? [...selected] : ["전체"],
                 questionFormat: format,
                 difficulty,
@@ -166,8 +235,8 @@ export default function CareerPage() {
     return (
         <div className="max-w-3xl mx-auto px-6 py-12">
             <PageHeader
-                title="성공적인 직업생활 변형문제"
-                description="교과서를 올리면 목차를 뽑아드려요. 강조 단원만 골라 변형 문제를 만듭니다."
+                title={`${subjectName || "교과서"} 변형문제`}
+                description="과목을 고르고 교과서를 올리면 목차를 뽑아드려요. 강조 단원·필기 사진을 반영해 변형 문제를 만듭니다."
                 backHref="/"
             />
 
@@ -220,6 +289,33 @@ export default function CareerPage() {
             {/* ── Step 1: Upload + 목차 추출 ─────────────────── */}
             {step === "upload" && (
                 <section className="bg-bg-1 rounded-2xl shadow-xs border border-border-1 p-8">
+                    <div className="mb-6 flex flex-wrap items-end gap-4">
+                        <Select
+                            label="과목 선택"
+                            value={subjectId}
+                            onChange={(e) => setSubjectId(e.target.value)}
+                            options={subjectOptions}
+                            disabled={extracting}
+                        />
+                        {subjectId === CUSTOM_SUBJECT_ID && (
+                            <label className="inline-flex flex-col gap-2 flex-1 min-w-[200px]">
+                                <span className="text-sm font-medium text-fg-2">
+                                    과목명
+                                </span>
+                                <input
+                                    type="text"
+                                    value={customSubject}
+                                    onChange={(e) =>
+                                        setCustomSubject(e.target.value)
+                                    }
+                                    placeholder="예) 운영체제"
+                                    maxLength={40}
+                                    disabled={extracting}
+                                    className="h-10 px-4 bg-bg-1 border border-border-2 rounded-md text-base text-fg-1 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/10"
+                                />
+                            </label>
+                        )}
+                    </div>
                     <div
                         className="border-2 border-dashed border-border-3 rounded-2xl p-12 text-center cursor-pointer hover:border-primary hover:bg-bg-2 transition-colors"
                         onClick={() =>
@@ -261,7 +357,8 @@ export default function CareerPage() {
                                     </svg>
                                 </div>
                                 <p className="text-lg font-bold text-fg-1 mb-2">
-                                    교과서 PDF를 업로드하세요
+                                    {subjectName || "교과서"} 교과서 PDF를
+                                    업로드하세요
                                 </p>
                                 <p className="text-sm text-fg-3">
                                     올리면 목차(단원)를 자동으로 뽑아드려요 · 용량
@@ -278,8 +375,9 @@ export default function CareerPage() {
                         <Tip emoji="🎯" title="강조 단원만 선택">
                             선생님이 강조하신 단원만 골라 출제 범위를 좁혀요.
                         </Tip>
-                        <Tip emoji="🎙" title="강의 녹음 반영">
-                            수업 강조·녹음 내용을 붙여넣으면 출제에 반영됩니다.
+                        <Tip emoji="📸" title="필기 사진 반영">
+                            판서·필기 사진이나 강조 내용을 넣으면 출제 비중에
+                            반영돼요. 모두 선택 사항이에요.
                         </Tip>
                     </div>
                 </section>
@@ -299,7 +397,8 @@ export default function CareerPage() {
                                     {textbook?.name}
                                 </div>
                                 <div className="text-xs text-fg-4 mt-0.5">
-                                    목차 {outline.length}개 단원 추출됨
+                                    {subjectName} · 목차 {outline.length}개
+                                    단원 추출됨
                                 </div>
                             </div>
                         </div>
@@ -408,8 +507,70 @@ export default function CareerPage() {
                         onChange={(e) => setEmphasis(e.target.value)}
                         rows={6}
                         showCount
-                        hint="강조하신 내용이나 수업 녹음을 텍스트로 붙여넣으면 출제 비중에 반영됩니다."
+                        hint="선택 사항이에요. 강조하신 내용이나 수업 녹음을 텍스트로 붙여넣으면 출제 비중에 반영됩니다."
                     />
+
+                    {/* 필기 사진 */}
+                    <div>
+                        <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm font-medium text-fg-2">
+                                필기·판서 사진
+                                <span className="ml-1 text-fg-4 font-normal">
+                                    (선택)
+                                </span>
+                            </span>
+                            <span className="text-xs text-fg-4 tabular-nums">
+                                {noteImages.length}/{NOTE_IMAGE_MAX_COUNT}
+                            </span>
+                        </div>
+                        <input
+                            ref={imageInputRef}
+                            type="file"
+                            accept={NOTE_IMAGE_TYPES.join(",")}
+                            multiple
+                            hidden
+                            onChange={handleImageSelect}
+                        />
+                        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                            {imagePreviews.map((src, i) => (
+                                <div
+                                    key={src}
+                                    className="relative aspect-square rounded-lg overflow-hidden border border-border-2 bg-bg-2"
+                                >
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                        src={src}
+                                        alt={noteImages[i]?.name ?? "필기 사진"}
+                                        className="w-full h-full object-cover"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => removeImage(i)}
+                                        aria-label="사진 삭제"
+                                        className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/60 text-white text-xs font-bold flex items-center justify-center hover:bg-black/80"
+                                    >
+                                        ✕
+                                    </button>
+                                </div>
+                            ))}
+                            {noteImages.length < NOTE_IMAGE_MAX_COUNT && (
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        imageInputRef.current?.click()
+                                    }
+                                    className="aspect-square rounded-lg border-2 border-dashed border-border-3 text-fg-3 hover:border-primary hover:bg-bg-2 transition-colors flex flex-col items-center justify-center gap-1 text-xs font-bold"
+                                >
+                                    <span className="text-xl">＋</span>
+                                    사진 추가
+                                </button>
+                            )}
+                        </div>
+                        <p className="mt-1.5 text-xs text-fg-4">
+                            칠판·노트 사진을 올리면 사진 속 강조 개념의 출제
+                            비중을 높여요. JPG·PNG·WEBP, 장당 5MB까지.
+                        </p>
+                    </div>
 
                     {/* 문제 수 / 유형 / 난이도 */}
                     <div className="flex flex-wrap items-end gap-6">
@@ -443,6 +604,8 @@ export default function CareerPage() {
                             {selected.size > 0
                                 ? `${selected.size}개 단원에서 ${count}문제`
                                 : `교과서 전체에서 ${count}문제`}
+                            {noteImages.length > 0 &&
+                                ` · 필기 사진 ${noteImages.length}장 반영`}
                         </span>
                         <AppButton
                             size="lg"

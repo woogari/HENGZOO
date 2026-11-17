@@ -8,6 +8,12 @@ import {
     uploadPdfFile,
     pdfErrorMessage,
 } from "@/lib/anthropic";
+import {
+    DEFAULT_SUBJECT,
+    NOTE_IMAGE_MAX_BYTES,
+    NOTE_IMAGE_MAX_COUNT,
+    NOTE_IMAGE_TYPES,
+} from "@/lib/subjects";
 import type {
     Difficulty,
     GeneratedQuestion,
@@ -17,7 +23,10 @@ import type {
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
+type NoteImageType = (typeof NOTE_IMAGE_TYPES)[number];
+
 interface CareerReq {
+    subject?: string;
     questionCount: number;
     questionFormat: QuestionFormat;
     difficulty: Difficulty;
@@ -52,19 +61,33 @@ const CareerSchema = z.object({
     ),
 });
 
-function buildPrompt(req: CareerReq): string {
+function buildPrompt(
+    req: CareerReq,
+    subject: string,
+    imageCount: number,
+): string {
     const count = Math.max(1, Math.min(req.questionCount, 30));
     const topic = req.customTopic?.trim();
+    const imageRule =
+        imageCount > 0
+            ? `
+[필기·판서 사진]
+- 교과서 뒤에 첨부된 사진 ${imageCount}장은 선생님 수업의 판서·학생 필기다. 이것은 **수업 강조 내용**이다.
+- 사진에 적힌 개념·키워드·밑줄·별표 친 부분의 출제 비중을 높인다.
+- 단, 문제와 정답의 근거는 반드시 교과서에서 찾는다. 사진에만 있고 교과서에 없는 내용은 출제하지 않는다.
+- 사진 글씨가 흐려 읽을 수 없으면 그 부분은 무시한다.
+`
+            : "";
 
-    return `너는 한국 고등학교 "성공적인 직업생활" 과목의 시험 문제를 출제하는 전문 교사다.
+    return `너는 한국 고등학교 "${subject}" 과목의 시험 문제를 출제하는 전문 교사다.
 첨부된 PDF는 학생들이 실제로 배우는 **교과서**다. 이 교과서가 유일한 출제 근거다.
 
 [가장 중요한 규칙]
 - 반드시 첨부된 교과서 PDF의 **실제 내용**에서만 문제를 출제한다. 교과서에 없는 내용을 지어내지 마라.
 - 아래 "선생님 지시사항"에 페이지 번호나 단원이 적혀 있으면(예: "70쪽 암기하기", "3단원 위주"), 그 부분의 교과서 내용을 우선적으로 다뤄 문제를 낸다.
 - 선생님이 강조한 주제·키워드가 있으면 그 비중을 높여 출제한다.
-- 지시사항이 특정 주제(예: 면접)를 콕 집지 않았다면, 교과서에서 실제로 강조된 핵심 개념들을 골고루 다룬다. 임의로 면접/이력서 같은 한 주제만 반복하지 마라.
-
+- 지시사항이 특정 주제를 콕 집지 않았다면, 교과서에서 실제로 강조된 핵심 개념들을 골고루 다룬다. 임의로 한 주제만 반복하지 마라.
+${imageRule}
 [출제 사양]
 - 문항 수: 정확히 ${count}개.
 - 유형: ${FORMAT_GUIDE[req.questionFormat]}
@@ -95,6 +118,9 @@ export async function POST(req: Request) {
 
     const file = form.get("file");
     const payloadRaw = form.get("payload");
+    const images = form
+        .getAll("images")
+        .filter((v): v is File => v instanceof File && v.size > 0);
 
     if (!(file instanceof File)) {
         return Response.json(
@@ -121,6 +147,36 @@ export async function POST(req: Request) {
         );
     }
 
+    if (images.length > NOTE_IMAGE_MAX_COUNT) {
+        return Response.json(
+            {
+                success: false,
+                error: `필기 사진은 최대 ${NOTE_IMAGE_MAX_COUNT}장까지 올릴 수 있어요.`,
+            },
+            { status: 400 },
+        );
+    }
+    for (const img of images) {
+        if (!(NOTE_IMAGE_TYPES as readonly string[]).includes(img.type)) {
+            return Response.json(
+                {
+                    success: false,
+                    error: `${img.name}: JPG·PNG·WEBP 사진만 올릴 수 있어요.`,
+                },
+                { status: 400 },
+            );
+        }
+        if (img.size > NOTE_IMAGE_MAX_BYTES) {
+            return Response.json(
+                {
+                    success: false,
+                    error: `${img.name}: 사진 한 장은 5MB까지만 올릴 수 있어요.`,
+                },
+                { status: 400 },
+            );
+        }
+    }
+
     let parsed: CareerReq;
     try {
         parsed = JSON.parse(
@@ -134,7 +190,8 @@ export async function POST(req: Request) {
     }
 
     const total = Math.max(1, Math.min(parsed.questionCount || 10, 30));
-    const title = "성공적인 직업생활 변형문제집";
+    const subject = parsed.subject?.trim().slice(0, 40) || DEFAULT_SUBJECT;
+    const title = `${subject} 변형문제집`;
     const encoder = new TextEncoder();
 
     const stream = new ReadableStream<Uint8Array>({
@@ -161,6 +218,18 @@ export async function POST(req: Request) {
 
                 // Files API 로 업로드 → file_id 참조(요청 바디 32MB 제한 우회).
                 const fileId = await uploadPdfFile(file);
+                const imageBlocks = await Promise.all(
+                    images.map(async (img) => ({
+                        type: "image" as const,
+                        source: {
+                            type: "base64" as const,
+                            media_type: img.type as NoteImageType,
+                            data: Buffer.from(
+                                await img.arrayBuffer(),
+                            ).toString("base64"),
+                        },
+                    })),
+                );
 
                 send("progress", {
                     batch: 1,
@@ -185,7 +254,15 @@ export async function POST(req: Request) {
                                     type: "document",
                                     source: { type: "file", file_id: fileId },
                                 },
-                                { type: "text", text: buildPrompt(parsed) },
+                                ...imageBlocks,
+                                {
+                                    type: "text",
+                                    text: buildPrompt(
+                                        parsed,
+                                        subject,
+                                        imageBlocks.length,
+                                    ),
+                                },
                             ],
                         },
                     ],

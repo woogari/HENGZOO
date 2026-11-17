@@ -7,16 +7,17 @@ import {
     uploadPdfFile,
     pdfErrorMessage,
 } from "@/lib/anthropic";
+import { DEFAULT_SUBJECT } from "@/lib/subjects";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-const OUTLINE_PROMPT = `너는 한국 고등학교 "성공적인 직업생활" 교과서 PDF에서 **목차(단원 구조)** 를 추출하는 도구다.
+const outlinePrompt = (subject: string) => `너는 한국 고등학교 "${subject}" 교과서 PDF에서 **목차(단원 구조)** 를 추출하는 도구다.
 
 규칙:
 - 교과서에 목차 페이지가 있으면 그 목차를, 없으면 본문에 보이는 단원·소제목 구조를 바탕으로 추출한다.
-- title 에는 단원명(예: "Ⅲ. 진로 의사 결정과 직업 윤리", "대인 관계 능력")을 넣는다.
-- subtopics 에는 그 단원에 속한 중·소단원이나 핵심 주제(예: "의사 결정 유형", "갈등 관리 능력")를 배열로 넣는다. 없으면 빈 배열.
+- title 에는 교과서에 적힌 단원명(예: "Ⅲ. 진로 의사 결정과 직업 윤리", "2. 스택과 큐")을 그대로 넣는다.
+- subtopics 에는 그 단원에 속한 중·소단원이나 핵심 주제(예: "의사 결정 유형", "원형 큐")를 배열로 넣는다. 없으면 빈 배열.
 - 첨부된 PDF에 **실제로 있는** 단원·주제만 넣는다. 지어내지 마라.
 - 등장 순서대로, 너무 잘게 쪼개지 말고 단원 단위로 묶는다 (보통 3~8개).`;
 
@@ -33,6 +34,10 @@ export async function POST(req: Request) {
     try {
         const form = await req.formData();
         const file = form.get("file");
+        const subjectRaw = form.get("subject");
+        const subject =
+            (typeof subjectRaw === "string" && subjectRaw.trim().slice(0, 40)) ||
+            DEFAULT_SUBJECT;
 
         if (!(file instanceof File)) {
             return Response.json(
@@ -76,7 +81,7 @@ export async function POST(req: Request) {
                             type: "document",
                             source: { type: "file", file_id: fileId },
                         },
-                        { type: "text", text: OUTLINE_PROMPT },
+                        { type: "text", text: outlinePrompt(subject) },
                     ],
                 },
             ],

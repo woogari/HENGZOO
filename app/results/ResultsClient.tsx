@@ -19,7 +19,7 @@ import {
     streamGenerateCareerQuestions,
 } from "@/lib/api";
 import { loadSession } from "@/lib/session";
-import { getCareerFile } from "@/lib/careerHandoff";
+import { getCareerFile, getCareerImages } from "@/lib/careerHandoff";
 import type {
     CareerSessionPayload,
     GeneratedQuestion,
@@ -104,7 +104,7 @@ export default function ResultsClient() {
                     if (!file) {
                         setStatus("error");
                         setError(
-                            "교과서 파일을 찾을 수 없어요. 새로고침했거나 직접 주소로 들어오면 파일이 사라져요. /career 에서 교과서를 다시 올려 주세요.",
+                            "교과서 파일을 찾을 수 없어요. 새로고침했거나 직접 주소로 들어오면 파일이 사라져요. /career 에서 교과서(와 필기 사진)를 다시 올려 주세요.",
                         );
                         return;
                     }
@@ -115,9 +115,13 @@ export default function ResultsClient() {
                     });
                     setStatus("streaming");
                     let terminal: Status | null = null;
+                    const images = sessionId
+                        ? getCareerImages(sessionId)
+                        : [];
                     for await (const ev of streamGenerateCareerQuestions(
                         file,
                         c.request,
+                        images,
                     )) {
                         if (cancelled) return;
                         switch (ev.event) {
@@ -187,14 +191,23 @@ export default function ResultsClient() {
         );
     }
 
+    const careerPayload =
+        mode === "career" ? (payload as CareerSessionPayload) : null;
     const subject =
-        mode === "math" ? "수학 (숫자 변형)" : "성공적인 직업생활";
+        mode === "math"
+            ? "수학 (숫자 변형)"
+            : careerPayload?.subject ||
+              careerPayload?.request.selectedSubjects[0] ||
+              "성공적인 직업생활";
+    const noteImageCount = careerPayload?.noteImageCount ?? 0;
 
     return (
         <div className="exam-sheet max-w-3xl mx-auto px-6 py-12">
             <PageHeader
                 title="변형 문제집"
-                description={`${subject} · ${questions.length}문항 생성`}
+                description={`${subject} · ${questions.length}문항 생성${
+                    noteImageCount > 0 ? ` · 필기 사진 ${noteImageCount}장 반영` : ""
+                }`}
                 backHref={mode === "math" ? "/math" : "/career"}
                 actions={
                     status === "done" ? (
@@ -244,7 +257,7 @@ export default function ResultsClient() {
 
             {status === "done" && questions.length > 0 && (
                 <ExamHeader
-                    title="성공적인 직업생활 · 변형 문제"
+                    title={`${subject} · 변형 문제`}
                     count={questions.length}
                     mode={answerMode}
                 />

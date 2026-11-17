@@ -124,6 +124,10 @@ export interface CareerSessionPayload {
     textbookFileSize: number | null;
     emphasis: string;
     pastExam: string;
+    /** 선택과목명 (예: 자료구조). 이전 세션 호환을 위해 optional. */
+    subject?: string;
+    /** 첨부한 필기 사진 수. */
+    noteImageCount?: number;
 }
 
 export type SessionPayload = MathSessionPayload | CareerSessionPayload;

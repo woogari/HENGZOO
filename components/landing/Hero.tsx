@@ -29,7 +29,7 @@ export function Hero() {
                 </Link>
                 <Link href="/career">
                     <AppButton size="lg" variant="secondary">
-                        성공적인 직업생활 →
+                        교과서 변형문제 →
                     </AppButton>
                 </Link>
             </div>
